@@ -18,7 +18,6 @@ DATA = [
 ]
 
 
-
 def main():
     # character to index
     text = "".join(DATA)
