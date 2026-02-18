@@ -1,3 +1,5 @@
+import time
+
 import torch
 import torch.optim as optim
 
@@ -6,6 +8,7 @@ from model import LLM
 
 MAX_LEN = 64
 LEARNING_RATE = 1e-4
+ITERATIONS = 100
 DATA = [
     "My name is Deric.",
     "Jenny is my wife.",
@@ -38,21 +41,28 @@ def main():
     model = LLM(vocab_size, 512, 8, 6, MAX_LEN)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
+    start = time.time()
     model.train()
-    for i in range(200):
+    for i in range(ITERATIONS):
         optimizer.zero_grad()
         _, loss = model(x, y)
         loss.backward()
         optimizer.step()
 
-        print(f"Iteration {i:3d} | Loss: {loss.item():.4f}")
+        if i % 10 == 0:
+            print(f"Iteration {i} | Loss: {loss.item():.4f}")
+    end = time.time()
+    print(f"Training took {end - start:.2f}s ({ITERATIONS / (end - start):.2f} iterations/second)")
 
     print("Generating...")
 
+    start = time.time()
     model.eval()
     generated = model.generate(x[:, :5], max_new_tokens=64, top_p=0.9)
     for example in generated:
         print("".join([itoc[int(idx)] for idx in example]))
+    end = time.time()
+    print(f"Generating took {end - start:.2f}s ({(end - start) / len(generated):.2f}s per example)")
 
 
 if __name__ == "__main__":

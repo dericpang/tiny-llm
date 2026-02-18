@@ -76,7 +76,6 @@ class LLM(nn.Module):
         self.pos_embed: nn.Embedding = nn.Embedding(max_len, d_model)
         self.blocks: nn.ModuleList[DecoderBlock] = nn.ModuleList([DecoderBlock(d_model, num_heads) for _ in range(num_layers)])
         self.ln = nn.LayerNorm(d_model)
-        print(vocab_size)
         self.lm_head: nn.Linear = nn.Linear(d_model, vocab_size)
 
 
