@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class MultiHeadCausalSelfAttention(nn.Module):
+class MultiHeadMaskedAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int) -> None:
         super().__init__()
         assert d_model % num_heads == 0
@@ -54,7 +54,7 @@ class DecoderBlock(nn.Module):
     def __init__(self, d_model:int, num_heads:int) -> None:
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
-        self.attention = MultiHeadCausalSelfAttention(d_model, num_heads)
+        self.attention = MultiHeadMaskedAttention(d_model, num_heads)
         self.ff = FeedForwardNetwork(d_model)
         self.ln2 = nn.LayerNorm(d_model)
 
