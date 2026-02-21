@@ -22,6 +22,14 @@ DATA = [
 
 
 def main():
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")  # Optimized for Mac M1/M2/M3 chips
+    else:
+        device = torch.device("cpu")
+    print("Using device", device)
+
     # character to index
     text = "".join(DATA)
     chars: list[str] = sorted(list(set(text)))
@@ -35,10 +43,10 @@ def main():
         batch.append(indexes)
 
     data = torch.tensor(batch, dtype=torch.long)
-    x = data[:, :-1].contiguous()
-    y = data[:, 1:].contiguous()
+    x = data[:, :-1].contiguous().to(device)
+    y = data[:, 1:].contiguous().to(device)
 
-    model = LLM(vocab_size, 512, 8, 6, MAX_LEN)
+    model = LLM(vocab_size, 512, 8, 6, MAX_LEN).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     start = time.time()
@@ -55,7 +63,6 @@ def main():
     print(f"Training took {end - start:.2f}s ({ITERATIONS / (end - start):.2f} iterations/second)")
 
     print("Generating...")
-
     start = time.time()
     model.eval()
     generated = model.generate(x[:, :5], max_new_tokens=64, top_p=0.9)
