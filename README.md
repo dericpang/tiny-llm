@@ -4,10 +4,10 @@ Features:
 
 - Pre-layer normalization
 - Nucleus sampling
+- Embeddings and final projection tied together
 
 TODOs:
 
-- KV caching
 - SwiGLU activation
 - Rotary position embeddings
 - Flash attention

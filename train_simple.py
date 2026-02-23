@@ -8,7 +8,7 @@ from model import LLM
 
 MAX_LEN = 64
 LEARNING_RATE = 1e-4
-ITERATIONS = 100
+ITERATIONS = 200
 DATA = [
     "My name is Deric.",
     "Jenny is my wife.",
@@ -37,7 +37,7 @@ def main():
     ctoi = {ch: i for i, ch in enumerate(chars)}
     itoc = {i: ch for i, ch in enumerate(chars)}
 
-    batch = []
+    batch: list[list[int]] = []
     for example in DATA:
         indexes = [ctoi[c] for c in example] + [0] * (MAX_LEN - len(example))
         batch.append(indexes)
@@ -47,13 +47,14 @@ def main():
     y = data[:, 1:].contiguous().to(device)
 
     model = LLM(vocab_size, 512, 8, 6, MAX_LEN).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    optimizer: optim.Optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     start = time.time()
     model.train()
     for i in range(ITERATIONS):
         optimizer.zero_grad()
-        _, loss = model(x, y)
+        _, loss, _ = model(x, y)
+        assert loss is not None
         loss.backward()
         optimizer.step()
 
@@ -62,10 +63,19 @@ def main():
     end = time.time()
     print(f"Training took {end - start:.2f}s ({ITERATIONS / (end - start):.2f} iterations/second)")
 
-    print("Generating...")
+    print("Generating without KV caching...")
     start = time.time()
     model.eval()
-    generated = model.generate(x[:, :5], max_new_tokens=64, top_p=0.9)
+    generated = model.generate(x[:, :5], use_kv_cache=False)
+    for example in generated:
+        print("".join([itoc[int(idx)] for idx in example]))
+    end = time.time()
+    print(f"Generating took {end - start:.2f}s ({(end - start) / len(generated):.2f}s per example)")
+
+    print("Generating with KV caching...")
+    start = time.time()
+    model.eval()
+    generated = model.generate(x[:, :5])
     for example in generated:
         print("".join([itoc[int(idx)] for idx in example]))
     end = time.time()

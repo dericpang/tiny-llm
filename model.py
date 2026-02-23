@@ -6,35 +6,42 @@ import torch.nn.functional as F
 
 
 class MultiHeadMaskedAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int) -> None:
+    def __init__(self, d_model: int, num_heads: int, max_len: int) -> None:
         super().__init__()
         assert d_model % num_heads == 0
+        self._d_model = d_model
         self._num_heads = num_heads
 
-        self.q = nn.Linear(d_model, d_model)
-        self.k = nn.Linear(d_model, d_model)
-        self.v = nn.Linear(d_model, d_model)
+        self.qkv = nn.Linear(d_model, 3 * d_model)
         self.o = nn.Linear(d_model, d_model)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, C = x.shape
 
-        q = self.q(x)  # (B, d_model)
-        k = self.k(x)  # (B, d_model)
-        v = self.v(x)  # (B, d_model)
+        self.mask: torch.Tensor
+        self.register_buffer("mask", torch.tril(torch.ones(max_len, max_len)))
+    
+    def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor] | None) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+        B, T, C = x.shape
+        past_T = kv_cache[0].shape[1] if kv_cache else 0
+
+        new_kv_cache = None
+        q, k, v = self.qkv(x).split(self._d_model, dim=-1)  # (B, T, d_model)
+        if kv_cache:
+            past_k, past_v = kv_cache
+            k = torch.cat([past_k, k], dim=1)  # (B, T + T_{i-1}, d_model)
+            v = torch.cat([past_v, v], dim=1)  # (B, T + T_{i-1}, d_model)
+        new_kv_cache = (k, v) 
 
         q = q.view(B, T, self._num_heads, C // self._num_heads).transpose(1, 2)  # (B, num_heads, T, d_head)
-        k = k.view(B, T, self._num_heads, C // self._num_heads).transpose(1, 2)  # (B, num_heads, T, d_head)
-        v = v.view(B, T, self._num_heads, C // self._num_heads).transpose(1, 2)  # (B, num_heads, T, d_head)
+        k = k.view(B, past_T + T, self._num_heads, C // self._num_heads).transpose(1, 2)  # (B, num_heads, past_T + T, d_head)
+        v = v.view(B, past_T + T, self._num_heads, C // self._num_heads).transpose(1, 2)  # (B, num_heads, past_T + T, d_head)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.shape[-1]))  # (B, num_heads, T, T)
-        mask = torch.tril(torch.ones(T, T, device=x.device))
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.shape[-1]))  # (B, num_heads, T, past_T + T)
+        mask = self.mask[past_T:past_T + T, :past_T + T]
         att = att.masked_fill(mask == 0, float("-inf"))
         att = F.softmax(att, dim=-1)
         y = att @ v  # (B, num_heads, T, d_head)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.o(y)
-        return y
+        return y, new_kv_cache
 
 
 class FeedForwardNetwork(nn.Module):
@@ -51,20 +58,18 @@ class FeedForwardNetwork(nn.Module):
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, d_model:int, num_heads:int) -> None:
+    def __init__(self, d_model:int, num_heads:int, max_len:int) -> None:
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
-        self.attention = MultiHeadMaskedAttention(d_model, num_heads)
+        self.attention = MultiHeadMaskedAttention(d_model, num_heads, max_len)
         self.ff = FeedForwardNetwork(d_model)
         self.ln2 = nn.LayerNorm(d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.ln1(x)
-        attention_out = self.attention(x)
+    def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+        attention_out, kv_cache = self.attention(self.ln1(x), kv_cache)
         x = x + attention_out
-        x = self.ln2(x)
-        x = x + self.ff(x)
-        return x
+        x = x + self.ff(self.ln2(x))
+        return x, kv_cache
 
 
 class LLM(nn.Module):
@@ -74,22 +79,29 @@ class LLM(nn.Module):
 
         self.tok_embed: nn.Embedding = nn.Embedding(vocab_size, d_model)
         self.pos_embed: nn.Embedding = nn.Embedding(max_len, d_model)
-        self.blocks: nn.ModuleList[DecoderBlock] = nn.ModuleList([DecoderBlock(d_model, num_heads) for _ in range(num_layers)])
+        self.blocks: nn.ModuleList = nn.ModuleList([DecoderBlock(d_model, num_heads, max_len) for _ in range(num_layers)])
         self.ln = nn.LayerNorm(d_model)
         self.lm_head: nn.Linear = nn.Linear(d_model, vocab_size)
+        self.lm_head.weight = self.tok_embed.weight
 
 
-    def forward(self, x: torch.Tensor, y: torch.Tensor | None = None) -> torch.Tensor:
-        B, T = x.shape  # x has shape (batch, seq_len)
+    def forward(self, x: torch.Tensor, y: torch.Tensor | None = None, kv_cache: list[tuple[torch.Tensor, torch.Tensor]] | None = None) -> tuple[torch.Tensor, torch.Tensor | None, list[tuple[torch.Tensor, torch.Tensor] | None]]:
+        _, T = x.shape
         assert T <= self._max_len
+        past_T = kv_cache[0][0].shape[1] if kv_cache else 0
+        if kv_cache:
+            assert len(kv_cache) == len(self.blocks)
+            assert past_T + T <= self._max_len
 
         token_embeddings = self.tok_embed(x)  # (B, seq_len, d_model)
-        positions = torch.arange(0, T, device=x.device, dtype=torch.long)
-        positional_encodings = self.pos_embed(positions)
+        positions = torch.arange(past_T, past_T + T, device=x.device, dtype=torch.long)
+        positional_encodings = self.pos_embed(positions)  # (seq_len, d_model)
         x = token_embeddings + positional_encodings
 
-        for block in self.blocks:
-            x = block(x)
+        new_kv_cache: list[tuple[torch.Tensor, torch.Tensor] | None] = []
+        for i, block in enumerate(self.blocks):
+            x, new_block_kv_cache = block(x, kv_cache[i] if kv_cache else None)
+            new_kv_cache.append(new_block_kv_cache)
 
         x = self.ln(x)
         logits = self.lm_head(x)  # B, seq_len, vocab_size
@@ -98,12 +110,17 @@ class LLM(nn.Module):
         if y is not None:
             loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), y.view(-1))
 
-        return logits, loss
+        return logits, loss, new_kv_cache
 
-    def generate(self, x: torch.Tensor, max_new_tokens: int, top_p: float = 0.9) -> torch.Tensor:
-        for _ in range(max_new_tokens):
-            x_cond = x[:, -self._max_len:]
-            logits, _ = self(x_cond)
+    def generate(self, x: torch.Tensor, top_p: float = 0.9, use_kv_cache: bool = True) -> torch.Tensor:
+        _, T = x.shape
+        kv_cache = None
+        for _ in range(self._max_len - T):
+            logits = None
+            if use_kv_cache and kv_cache:
+                logits, _, kv_cache = self(x[:, -1:], None, kv_cache)
+            else:
+                logits, _, kv_cache = self(x)
             logits = logits[:, -1, :]
 
             if top_p < 1.0:
