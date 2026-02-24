@@ -73,9 +73,16 @@ class DecoderBlock(nn.Module):
 
 
 class LLM(nn.Module):
+    @classmethod
+    def from_pretrained(cls, path: str, map_location: str | torch.device | None = None) -> "LLM":
+        checkpoint = torch.load(path, map_location=map_location)
+        model = cls(**checkpoint["config"])
+        model.load_state_dict(checkpoint["state_dict"])
+        return model
+
     def __init__(self, vocab_size: int, d_model: int, num_heads: int, num_layers: int, max_len: int) -> None:
         super().__init__()
-        self._max_len = max_len
+        self.max_len: int = max_len
 
         self.tok_embed: nn.Embedding = nn.Embedding(vocab_size, d_model)
         self.pos_embed: nn.Embedding = nn.Embedding(max_len, d_model)
@@ -87,11 +94,11 @@ class LLM(nn.Module):
 
     def forward(self, x: torch.Tensor, y: torch.Tensor | None = None, kv_cache: list[tuple[torch.Tensor, torch.Tensor]] | None = None) -> tuple[torch.Tensor, torch.Tensor | None, list[tuple[torch.Tensor, torch.Tensor] | None]]:
         _, T = x.shape
-        assert T <= self._max_len
+        assert T <= self.max_len
         past_T = kv_cache[0][0].shape[1] if kv_cache else 0
         if kv_cache:
             assert len(kv_cache) == len(self.blocks)
-            assert past_T + T <= self._max_len
+            assert past_T + T <= self.max_len
 
         token_embeddings = self.tok_embed(x)  # (B, seq_len, d_model)
         positions = torch.arange(past_T, past_T + T, device=x.device, dtype=torch.long)
@@ -115,7 +122,7 @@ class LLM(nn.Module):
     def generate(self, x: torch.Tensor, top_p: float = 0.9, use_kv_cache: bool = True) -> torch.Tensor:
         _, T = x.shape
         kv_cache = None
-        for _ in range(self._max_len - T):
+        for _ in range(self.max_len - T):
             logits = None
             if use_kv_cache and kv_cache:
                 logits, _, kv_cache = self(x[:, -1:], None, kv_cache)
