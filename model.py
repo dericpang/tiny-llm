@@ -16,6 +16,7 @@ class LLMConfig:
     num_layers: int
     max_len: int
     rope_theta: float
+    flash_attention: bool
 
 
 class MultiHeadMaskedAttention(nn.Module):
@@ -28,7 +29,7 @@ class MultiHeadMaskedAttention(nn.Module):
         self.o = nn.Linear(config.d_model, config.d_model)
 
         self.mask: torch.Tensor  # (max_len, max_len)
-        self.register_buffer("mask", torch.tril(torch.ones(config.max_len, config.max_len)))
+        self.register_buffer("mask", torch.tril(torch.ones(config.max_len, config.max_len)) == 0)
 
         self.rope_cos: torch.Tensor  # (1, 1, max_len, d_head // 2)
         self.register_buffer("rope_cos", torch.cos(torch.arange(0, config.d_model // config.num_heads, 2) * (1.0 / config.rope_theta)).unsqueeze(0).repeat(config.max_len, 1)[None, None, :, :])
@@ -60,12 +61,16 @@ class MultiHeadMaskedAttention(nn.Module):
             v = torch.cat([past_v, v], dim=2)  # (B, num_heads, past_T + T, d_head)
         new_kv_cache = (k, v)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(d_head))  # (B, num_heads, T, past_T + T)
         mask = self.mask[past_T:past_T + T, :past_T + T]
-        att = att.masked_fill(mask == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        y = att @ v  # (B, num_heads, T, d_head)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        if self.config.flash_attention:
+            y = F.scaled_dot_product_attention(q, k, v, mask, dropout_p=0.0).view(B, T, C)
+        else:
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(d_head))  # (B, num_heads, T, past_T + T)
+            att = att.masked_fill(mask, float("-inf"))
+            att = F.softmax(att, dim=-1)
+            y = att @ v  # (B, num_heads, T, d_head)
+            y = y.transpose(1, 2).contiguous().view(B, T, C)
+
         y = self.o(y)
         return y, new_kv_cache
 

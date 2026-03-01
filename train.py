@@ -7,6 +7,7 @@ from itertools import cycle
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from data.char_dataset import CharDataset
 from data.shakespeare import ShakespeareCharDataset
@@ -27,6 +28,7 @@ def main():
     parser.add_argument("--num_heads", type=int, default=8)
     parser.add_argument("--max_len", type=int, default=64)
     parser.add_argument("--rope_theta", type=float, default=10_000.0)
+    parser.add_argument("--flash_attention", type=bool, default=True)
 
     parser.add_argument("--dataset", type=str, choices=list(DATASETS.keys()), default="simple")
     parser.add_argument("--learning_rate", type=float, default=1e-4)
@@ -34,10 +36,14 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--save_steps", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--debug", type=bool, default=False)
+    parser.add_argument("--device", type=str, choices=["cuda", "mps", "cpu"], default=None)
 
     args = parser.parse_args()
 
-    if torch.cuda.is_available():
+    if args.device is not None:
+        device = torch.device(args.device)
+    elif torch.cuda.is_available():
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():
         device = torch.device("mps")  # Optimized for Mac M1/M2/M3 chips
@@ -50,16 +56,19 @@ def main():
     dev_dataset: CharDataset = DATASETS[args.dataset](args.max_len, "dev")
     dev_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=True)
 
-    config = LLMConfig(vocab_size=train_dataset.vocab_size, d_model=args.d_model, num_heads=args.num_heads, num_layers=args.num_layers, max_len=args.max_len, rope_theta=args.rope_theta)
+    config = LLMConfig(vocab_size=train_dataset.vocab_size, d_model=args.d_model, num_heads=args.num_heads, num_layers=args.num_layers, max_len=args.max_len, rope_theta=args.rope_theta, flash_attention=args.flash_attention)
+    print("Model config:", config)
     model = LLM(config).to(device)
     print("Vocab size:", train_dataset.vocab_size)
     print("Model has", f"{sum(p.numel() for p in model.parameters()):,}", "parameters")
-    for name, param in model.named_parameters():
-        print(name, f"{param.numel():,}")
+    if args.debug:
+        for name, param in model.named_parameters():
+            print(name, f"{param.numel():,}")
     optimizer: optim.AdamW = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
     start = time.time()
-    for i, (x, y) in enumerate(cycle(train_loader)):
+    pbar = tqdm(enumerate(cycle(train_loader)), total=args.steps, desc="Training")
+    for i, (x, y) in pbar:
         model.train()
         if i >= args.steps:
             break
@@ -71,8 +80,7 @@ def main():
         loss.backward()
         optimizer.step()  # type: ignore[no-untyped-call]
 
-        if i % 10 == 0:
-            print(f"Step {i} | Loss: {loss.item():.4f}")
+        pbar.set_postfix(loss=f"{loss.item():.4f}")  # type: ignore[no-untyped-call]
 
         is_last = (i + 1) == args.steps
         is_save_step = args.save_steps is not None and (i + 1) % args.save_steps == 0

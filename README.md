@@ -7,9 +7,6 @@ Features:
 - Weight tying between embedding and output layers
 - SwiGLU
 - Rotary position embeddings
-
-TODOs:
-
 - Flash attention
 
 ## Commands
