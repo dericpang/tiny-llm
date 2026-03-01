@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--num_layers", type=int, default=6)
     parser.add_argument("--num_heads", type=int, default=8)
     parser.add_argument("--max_len", type=int, default=64)
+    parser.add_argument("--rope_theta", type=float, default=10_000.0)
 
     parser.add_argument("--dataset", type=str, choices=list(DATASETS.keys()), default="simple")
     parser.add_argument("--learning_rate", type=float, default=1e-4)
@@ -49,7 +50,7 @@ def main():
     dev_dataset: CharDataset = DATASETS[args.dataset](args.max_len, "dev")
     dev_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=True)
 
-    config = LLMConfig(vocab_size=train_dataset.vocab_size, d_model=args.d_model, num_heads=args.num_heads, num_layers=args.num_layers, max_len=args.max_len)
+    config = LLMConfig(vocab_size=train_dataset.vocab_size, d_model=args.d_model, num_heads=args.num_heads, num_layers=args.num_layers, max_len=args.max_len, rope_theta=args.rope_theta)
     model = LLM(config).to(device)
     print("Vocab size:", train_dataset.vocab_size)
     print("Model has", f"{sum(p.numel() for p in model.parameters()):,}", "parameters")

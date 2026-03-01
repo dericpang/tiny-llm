@@ -15,6 +15,7 @@ class LLMConfig:
     num_heads: int
     num_layers: int
     max_len: int
+    rope_theta: float
 
 
 class MultiHeadMaskedAttention(nn.Module):
@@ -26,8 +27,17 @@ class MultiHeadMaskedAttention(nn.Module):
         self.qkv = nn.Linear(config.d_model, 3 * config.d_model)
         self.o = nn.Linear(config.d_model, config.d_model)
 
-        self.mask: torch.Tensor
+        self.mask: torch.Tensor  # (max_len, max_len)
         self.register_buffer("mask", torch.tril(torch.ones(config.max_len, config.max_len)))
+
+        self.rope_cos: torch.Tensor  # (1, 1, max_len, d_head // 2)
+        self.register_buffer("rope_cos", torch.cos(torch.arange(0, config.d_model // config.num_heads, 2) * (1.0 / config.rope_theta)).unsqueeze(0).repeat(config.max_len, 1)[None, None, :, :])
+        self.rope_sin: torch.Tensor  # (1, 1, max_len, d_head // 2)
+        self.register_buffer("rope_sin", torch.sin(torch.arange(0, config.d_model // config.num_heads, 2) * (1.0 / config.rope_theta)).unsqueeze(0).repeat(config.max_len, 1)[None, None, :, :])
+
+    def _apply_rope(self, x: torch.Tensor, T: int, past_T: int) -> torch.Tensor:
+        x1, x2 = x.chunk(2, dim=-1)  # each (B, num_heads, T, d_head // 2)
+        return torch.cat([x1 * self.rope_cos[:, past_T:past_T + T] - x2 * self.rope_sin[:, past_T:past_T + T], x2 * self.rope_cos[:, past_T:past_T + T] + x1 * self.rope_sin[:, past_T:past_T + T]], dim=-1)
     
     def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor] | None) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         B, T, C = x.shape
@@ -35,8 +45,13 @@ class MultiHeadMaskedAttention(nn.Module):
         past_T = kv_cache[0].shape[2] if kv_cache else 0
 
         q, k, v = self.qkv(x).split(self.config.d_model, dim=-1)  # (B, T, d_model)
+
         q = q.view(B, T, self.config.num_heads, d_head).transpose(1, 2)  # (B, num_heads, T, d_head)
+        q = self._apply_rope(q, T, past_T)
+
         k = k.view(B, T, self.config.num_heads, d_head).transpose(1, 2)  # (B, num_heads, T, d_head)
+        k = self._apply_rope(k, T, past_T)
+
         v = v.view(B, T, self.config.num_heads, d_head).transpose(1, 2)  # (B, num_heads, T, d_head)
 
         if kv_cache:
@@ -70,15 +85,15 @@ class SwiGLU(nn.Module):
 class DecoderBlock(nn.Module):
     def __init__(self, config: LLMConfig) -> None:
         super().__init__()
-        self.ln1 = nn.RMSNorm(config.d_model)
+        self.rn1 = nn.RMSNorm(config.d_model)
         self.attention = MultiHeadMaskedAttention(config)
         self.swiglu = SwiGLU(config)
-        self.ln2 = nn.RMSNorm(config.d_model)
+        self.rn2 = nn.RMSNorm(config.d_model)
 
     def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
-        attention_out, kv_cache = self.attention(self.ln1(x), kv_cache)
+        attention_out, kv_cache = self.attention(self.rn1(x), kv_cache)
         x = x + attention_out
-        x = x + self.swiglu(self.ln2(x))
+        x = x + self.swiglu(self.rn2(x))
         return x, kv_cache
 
 
@@ -96,7 +111,6 @@ class LLM(nn.Module):
         self.max_len: int = config.max_len
 
         self.tok_embed: nn.Embedding = nn.Embedding(config.vocab_size, config.d_model)
-        self.pos_embed: nn.Embedding = nn.Embedding(config.max_len, config.d_model)
         self.blocks: nn.ModuleList = nn.ModuleList([DecoderBlock(config) for _ in range(config.num_layers)])
         self.ln = nn.RMSNorm(config.d_model)
         self.lm_head: nn.Linear = nn.Linear(config.d_model, config.vocab_size)
@@ -111,10 +125,7 @@ class LLM(nn.Module):
             assert len(kv_cache) == len(self.blocks)
             assert past_T + T <= self.max_len
 
-        token_embeddings = self.tok_embed(x)  # (B, seq_len, d_model)
-        positions = torch.arange(past_T, past_T + T, device=x.device, dtype=torch.long)
-        positional_encodings = self.pos_embed(positions)  # (seq_len, d_model)
-        x = token_embeddings + positional_encodings
+        x = self.tok_embed(x)  # (B, seq_len, d_model)
 
         new_kv_cache: list[tuple[torch.Tensor, torch.Tensor] | None] = []
         for i, block in enumerate(self.blocks):

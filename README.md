@@ -6,10 +6,10 @@ Features:
 - Nucleus sampling
 - Weight tying between embedding and output layers
 - SwiGLU
+- Rotary position embeddings
 
 TODOs:
 
-- Rotary position embeddings
 - Flash attention
 
 ## Commands
