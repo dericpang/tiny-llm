@@ -4,11 +4,11 @@ Features:
 
 - Pre-layer normalization
 - Nucleus sampling
-- Embeddings and final projection tied together
+- Weight tying between embedding and output layers
+- SwiGLU
 
 TODOs:
 
-- SwiGLU activation
 - Rotary position embeddings
 - Flash attention
 

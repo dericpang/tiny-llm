@@ -55,31 +55,30 @@ class MultiHeadMaskedAttention(nn.Module):
         return y, new_kv_cache
 
 
-class FeedForwardNetwork(nn.Module):
+class SwiGLU(nn.Module):
     def __init__(self, config: LLMConfig) -> None:
         super().__init__()
-        self.l1 = nn.Linear(config.d_model, config.d_model*4)
-        self.l2 = nn.Linear(config.d_model*4, config.d_model)
+        self.config = config
+        self.up_proj = nn.Linear(config.d_model, 4 * config.d_model)
+        self.gate = nn.Linear(config.d_model, 4 * config.d_model)
+        self.down_proj = nn.Linear(4 * config.d_model, config.d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.l1(x)
-        x = F.gelu(x)
-        x = self.l2(x) 
-        return x
+        return self.down_proj(F.silu(self.gate(x)) * self.up_proj(x))
 
 
 class DecoderBlock(nn.Module):
     def __init__(self, config: LLMConfig) -> None:
         super().__init__()
-        self.ln1 = nn.LayerNorm(config.d_model)
+        self.ln1 = nn.RMSNorm(config.d_model)
         self.attention = MultiHeadMaskedAttention(config)
-        self.ff = FeedForwardNetwork(config)
-        self.ln2 = nn.LayerNorm(config.d_model)
+        self.swiglu = SwiGLU(config)
+        self.ln2 = nn.RMSNorm(config.d_model)
 
     def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         attention_out, kv_cache = self.attention(self.ln1(x), kv_cache)
         x = x + attention_out
-        x = x + self.ff(self.ln2(x))
+        x = x + self.swiglu(self.ln2(x))
         return x, kv_cache
 
 
@@ -99,7 +98,7 @@ class LLM(nn.Module):
         self.tok_embed: nn.Embedding = nn.Embedding(config.vocab_size, config.d_model)
         self.pos_embed: nn.Embedding = nn.Embedding(config.max_len, config.d_model)
         self.blocks: nn.ModuleList = nn.ModuleList([DecoderBlock(config) for _ in range(config.num_layers)])
-        self.ln = nn.LayerNorm(config.d_model)
+        self.ln = nn.RMSNorm(config.d_model)
         self.lm_head: nn.Linear = nn.Linear(config.d_model, config.vocab_size)
         self.lm_head.weight = self.tok_embed.weight
 
