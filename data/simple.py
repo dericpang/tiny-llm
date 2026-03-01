@@ -1,5 +1,6 @@
 import torch
-from torch.utils.data import Dataset
+
+from data.char_dataset import PAD_TOKEN_ID, CharDataset
 
 DATA = [
     "My name is Deric.",
@@ -13,17 +14,23 @@ DATA = [
 ]
 
 
-class SimpleCharDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
-    def __init__(self, max_len: int):
+TRAIN_SPLIT = 0.8
+
+
+class SimpleCharDataset(CharDataset):
+    def __init__(self, max_len: int, split: str = "train"):
         text = "".join(DATA)
         chars = sorted(set(text))
         self.vocab_size = len(chars)
         self.ctoi = {ch: i for i, ch in enumerate(chars)}
         self.itoc = {i: ch for i, ch in enumerate(chars)}
 
+        n = int(len(DATA) * TRAIN_SPLIT)
+        split_data = DATA[:n] if split == "train" else DATA[n:]
+
         self.examples: list[torch.Tensor] = []
-        for example in DATA:
-            indexes = [self.ctoi[c] for c in example] + [0] * (max_len - len(example))
+        for example in split_data:
+            indexes = [self.ctoi[c] for c in example] + [PAD_TOKEN_ID] * (max_len - len(example))
             self.examples.append(torch.tensor(indexes, dtype=torch.long))
 
     def __len__(self) -> int:

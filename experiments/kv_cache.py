@@ -1,17 +1,30 @@
 import argparse
-import sys
 import time
+from itertools import islice
+from typing import Callable
 
 import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-sys.path.insert(0, ".")
+MAX_BATCHES = 50
+
+from data.char_dataset import CharDataset
+from data.shakespeare import ShakespeareCharDataset
 from data.simple import SimpleCharDataset
 from model import LLM
+
+DATASETS: dict[str, Callable[[int, str], CharDataset]] = {
+    "simple": SimpleCharDataset,
+    "shakespeare": ShakespeareCharDataset,
+}
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True)
+    parser.add_argument("--dataset", type=str, choices=list(DATASETS.keys()), default="simple")
+    parser.add_argument("--batch_size", type=int, default=8)
     args = parser.parse_args()
 
     if torch.cuda.is_available():
@@ -25,24 +38,27 @@ def main():
     model = LLM.from_pretrained(args.checkpoint, map_location=device).to(device)
     model.eval()
 
-    dataset = SimpleCharDataset(model.max_len)
-    x = torch.stack([dataset[i][0] for i in range(len(dataset))]).to(device)
+    dataset: CharDataset = DATASETS[args.dataset](model.max_len, "dev")
+    loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(dataset, batch_size=args.batch_size)
+
+    num_batches = min(MAX_BATCHES, len(loader))
 
     print("Generating without KV caching...")
     start = time.time()
-    generated = model.generate(x[:, :5], use_kv_cache=False)
-    for example in generated:
-        print(dataset.decode([int(idx) for idx in example]))
+    for x, _ in tqdm(islice(loader, num_batches), total=num_batches, desc="Without KV cache"):
+        x = x.to(device)
+        model.generate(x[:, :5], use_kv_cache=False)
     end = time.time()
-    print(f"Generating took {end - start:.2f}s ({(end - start) / len(generated):.2f}s per example)")
 
     print("Generating with KV caching...")
-    start = time.time()
-    generated = model.generate(x[:, :5])
-    for example in generated:
-        print(dataset.decode([int(idx) for idx in example]))
-    end = time.time()
-    print(f"Generating took {end - start:.2f}s ({(end - start) / len(generated):.2f}s per example)")
+    kv_start = time.time()
+    for x, _ in tqdm(islice(loader, num_batches), total=num_batches, desc="With KV cache"):
+        x = x.to(device)
+        model.generate(x[:, :5])
+    kv_end = time.time()
+
+    print(f"Generating without KV caching took {end - start:.2f}s ({(end - start) / num_batches:.2f}s per batch)")
+    print(f"Generating with KV caching took {kv_end - kv_start:.2f}s ({(kv_end - kv_start) / num_batches:.2f}s per batch)")
 
 
 if __name__ == "__main__":
