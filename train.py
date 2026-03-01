@@ -1,22 +1,25 @@
 import argparse
-from typing import Callable
 import os
 import time
 from itertools import cycle
+from typing import Callable
 
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data.char_dataset import CharDataset
-from data.shakespeare import ShakespeareCharDataset
+from data.shakespeare import ShakespeareCharDataset, ShakespeareDataset
 from data.simple import SimpleCharDataset
 from model import LLM, LLMConfig
 
-DATASETS: dict[str, Callable[[int, str], CharDataset]] = {
-    "simple": SimpleCharDataset,
-    "shakespeare": ShakespeareCharDataset,
+
+TrainDataset = SimpleCharDataset | ShakespeareCharDataset | ShakespeareDataset
+
+DATASETS: dict[str, Callable[[int, str], TrainDataset]] = {
+    "simple_char": SimpleCharDataset,
+    "shakespeare_char": ShakespeareCharDataset,
+    "shakespeare": ShakespeareDataset,
 }
 
 
@@ -30,7 +33,7 @@ def main():
     parser.add_argument("--rope_theta", type=float, default=10_000.0)
     parser.add_argument("--flash_attention", type=bool, default=True)
 
-    parser.add_argument("--dataset", type=str, choices=list(DATASETS.keys()), default="simple")
+    parser.add_argument("--dataset", type=str, choices=list(DATASETS.keys()), default="simple_char")
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--batch_size", type=int, default=8)
@@ -51,9 +54,10 @@ def main():
         device = torch.device("cpu")
     print("Using device", device)
 
-    train_dataset: CharDataset = DATASETS[args.dataset](args.max_len, "train")
+    train_dataset = DATASETS[args.dataset](args.max_len, "train")
+    assert hasattr(train_dataset, "vocab_size")
     train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    dev_dataset: CharDataset = DATASETS[args.dataset](args.max_len, "dev")
+    dev_dataset = DATASETS[args.dataset](args.max_len, "dev")
     dev_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=True)
 
     config = LLMConfig(vocab_size=train_dataset.vocab_size, d_model=args.d_model, num_heads=args.num_heads, num_layers=args.num_layers, max_len=args.max_len, rope_theta=args.rope_theta, flash_attention=args.flash_attention)

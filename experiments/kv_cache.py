@@ -7,16 +7,16 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-MAX_BATCHES = 50
-
-from data.char_dataset import CharDataset
-from data.shakespeare import ShakespeareCharDataset
+from data.shakespeare import ShakespeareDataset, ShakespeareCharDataset
 from data.simple import SimpleCharDataset
+from train import TrainDataset
 from model import LLM
 
-DATASETS: dict[str, Callable[[int, str], CharDataset]] = {
-    "simple": SimpleCharDataset,
-    "shakespeare": ShakespeareCharDataset,
+MAX_BATCHES = 50
+DATASETS: dict[str, Callable[[int, str], TrainDataset]] = {
+    "simple_char": SimpleCharDataset,
+    "shakespeare_char": ShakespeareCharDataset,
+    "shakespeare": ShakespeareDataset,
 }
 
 
@@ -38,7 +38,7 @@ def main():
     model = LLM.from_pretrained(args.checkpoint, map_location=device).to(device)
     model.eval()
 
-    dataset: CharDataset = DATASETS[args.dataset](model.max_len, "dev")
+    dataset = DATASETS[args.dataset](model.max_len, "dev")
     loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(dataset, batch_size=args.batch_size)
 
     num_batches = min(MAX_BATCHES, len(loader))

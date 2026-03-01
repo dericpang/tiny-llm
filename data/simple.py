@@ -1,6 +1,7 @@
 import torch
+from torch.utils.data import Dataset
 
-from data.char_dataset import PAD_TOKEN_ID, CharDataset
+PAD_TOKEN_ID = 0
 
 DATA = [
     "My name is Deric.",
@@ -17,7 +18,7 @@ DATA = [
 TRAIN_SPLIT = 0.8
 
 
-class SimpleCharDataset(CharDataset):
+class SimpleCharDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __init__(self, max_len: int, split: str = "train"):
         text = "".join(DATA)
         chars = sorted(set(text))

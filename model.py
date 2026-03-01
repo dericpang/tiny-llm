@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data.char_dataset import PAD_TOKEN_ID
+PAD_TOKEN_ID = 0
 
 
 @dataclass
@@ -38,7 +38,7 @@ class MultiHeadMaskedAttention(nn.Module):
 
     def _apply_rope(self, x: torch.Tensor, T: int, past_T: int) -> torch.Tensor:
         x1, x2 = x.chunk(2, dim=-1)  # each (B, num_heads, T, d_head // 2)
-        return torch.cat([x1 * self.rope_cos[:, past_T:past_T + T] - x2 * self.rope_sin[:, past_T:past_T + T], x2 * self.rope_cos[:, past_T:past_T + T] + x1 * self.rope_sin[:, past_T:past_T + T]], dim=-1)
+        return torch.cat([x1 * self.rope_cos[:, :, past_T:past_T + T] - x2 * self.rope_sin[:, :, past_T:past_T + T], x2 * self.rope_cos[:, :, past_T:past_T + T] + x1 * self.rope_sin[:, :, past_T:past_T + T]], dim=-1)
     
     def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor] | None) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         B, T, C = x.shape
