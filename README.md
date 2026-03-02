@@ -8,6 +8,7 @@ Features:
 - SwiGLU
 - Rotary position embeddings
 - Flash attention
+- Grouped query attention
 
 ## Commands
 

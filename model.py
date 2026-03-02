@@ -11,8 +11,9 @@ PAD_TOKEN_ID = 0
 @dataclass
 class LLMConfig:
     vocab_size: int
-    d_model: int
+    hidden_size: int
     num_heads: int
+    num_kv_heads: int
     num_layers: int
     max_len: int
     rope_theta: float
@@ -22,19 +23,22 @@ class LLMConfig:
 class MultiHeadMaskedAttention(nn.Module):
     def __init__(self, config: LLMConfig) -> None:
         super().__init__()
-        assert config.d_model % config.num_heads == 0
+        assert config.hidden_size % config.num_heads == 0
+        assert config.num_heads % config.num_kv_heads == 0
+        head_size = config.hidden_size // config.num_heads
+
         self.config = config
 
-        self.qkv = nn.Linear(config.d_model, 3 * config.d_model)
-        self.o = nn.Linear(config.d_model, config.d_model)
+        self.qkv = nn.Linear(config.hidden_size, (config.num_heads + 2 * config.num_kv_heads) * head_size)
+        self.o = nn.Linear(config.hidden_size, config.hidden_size)
 
         self.mask: torch.Tensor  # (max_len, max_len)
         self.register_buffer("mask", torch.tril(torch.ones(config.max_len, config.max_len)) == 0)
 
         self.rope_cos: torch.Tensor  # (1, 1, max_len, d_head // 2)
-        self.register_buffer("rope_cos", torch.cos(torch.arange(0, config.d_model // config.num_heads, 2) * (1.0 / config.rope_theta)).unsqueeze(0).repeat(config.max_len, 1)[None, None, :, :])
+        self.register_buffer("rope_cos", torch.cos(torch.arange(0, config.hidden_size // config.num_heads, 2) * (1.0 / config.rope_theta)).unsqueeze(0).repeat(config.max_len, 1)[None, None, :, :])
         self.rope_sin: torch.Tensor  # (1, 1, max_len, d_head // 2)
-        self.register_buffer("rope_sin", torch.sin(torch.arange(0, config.d_model // config.num_heads, 2) * (1.0 / config.rope_theta)).unsqueeze(0).repeat(config.max_len, 1)[None, None, :, :])
+        self.register_buffer("rope_sin", torch.sin(torch.arange(0, config.hidden_size // config.num_heads, 2) * (1.0 / config.rope_theta)).unsqueeze(0).repeat(config.max_len, 1)[None, None, :, :])
 
     def _apply_rope(self, x: torch.Tensor, T: int, past_T: int) -> torch.Tensor:
         x1, x2 = x.chunk(2, dim=-1)  # each (B, num_heads, T, d_head // 2)
@@ -42,30 +46,33 @@ class MultiHeadMaskedAttention(nn.Module):
     
     def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor] | None) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         B, T, C = x.shape
-        d_head = C // self.config.num_heads
+        head_size = C // self.config.num_heads
         past_T = kv_cache[0].shape[2] if kv_cache else 0
 
-        q, k, v = self.qkv(x).split(self.config.d_model, dim=-1)  # (B, T, d_model)
+        q, k, v = self.qkv(x).split([self.config.num_heads * head_size, self.config.num_kv_heads * head_size, self.config.num_kv_heads * head_size], dim=-1)  # (B, T, num_heads * head_size | num_kv_heads * head_size)
 
-        q = q.view(B, T, self.config.num_heads, d_head).transpose(1, 2)  # (B, num_heads, T, d_head)
+        q = q.view(B, T, self.config.num_heads, head_size).transpose(1, 2)  # (B, num_heads, T, head_size)
         q = self._apply_rope(q, T, past_T)
 
-        k = k.view(B, T, self.config.num_heads, d_head).transpose(1, 2)  # (B, num_heads, T, d_head)
+        k = k.view(B, T, self.config.num_kv_heads, head_size).transpose(1, 2)  # (B, num_kv_heads, T, head_size)
         k = self._apply_rope(k, T, past_T)
 
-        v = v.view(B, T, self.config.num_heads, d_head).transpose(1, 2)  # (B, num_heads, T, d_head)
+        v = v.view(B, T, self.config.num_kv_heads, head_size).transpose(1, 2)  # (B, num_kv_heads, T, head_size)
 
         if kv_cache:
             past_k, past_v = kv_cache
-            k = torch.cat([past_k, k], dim=2)  # (B, num_heads, past_T + T, d_head)
-            v = torch.cat([past_v, v], dim=2)  # (B, num_heads, past_T + T, d_head)
+            k = torch.cat([past_k, k], dim=2)  # (B, num_kv_heads, past_T + T, d_head)
+            v = torch.cat([past_v, v], dim=2)  # (B, num_kv_heads, past_T + T, d_head)
         new_kv_cache = (k, v)
+
+        k = torch.repeat_interleave(k, self.config.num_heads // self.config.num_kv_heads, dim=1)  # (B, num_heads, T, head_size)
+        v = torch.repeat_interleave(v, self.config.num_heads // self.config.num_kv_heads, dim=1)  # (B, num_heads, T, head_size)
 
         mask = self.mask[past_T:past_T + T, :past_T + T]
         if self.config.flash_attention:
             y = F.scaled_dot_product_attention(q, k, v, mask, dropout_p=0.0).view(B, T, C)
         else:
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(d_head))  # (B, num_heads, T, past_T + T)
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(head_size))  # (B, num_heads, T, past_T + T)
             att = att.masked_fill(mask, float("-inf"))
             att = F.softmax(att, dim=-1)
             y = att @ v  # (B, num_heads, T, d_head)
@@ -79,9 +86,9 @@ class SwiGLU(nn.Module):
     def __init__(self, config: LLMConfig) -> None:
         super().__init__()
         self.config = config
-        self.up_proj = nn.Linear(config.d_model, 4 * config.d_model)
-        self.gate = nn.Linear(config.d_model, 4 * config.d_model)
-        self.down_proj = nn.Linear(4 * config.d_model, config.d_model)
+        self.up_proj = nn.Linear(config.hidden_size, 4 * config.hidden_size)
+        self.gate = nn.Linear(config.hidden_size, 4 * config.hidden_size)
+        self.down_proj = nn.Linear(4 * config.hidden_size, config.hidden_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.down_proj(F.silu(self.gate(x)) * self.up_proj(x))
@@ -90,10 +97,10 @@ class SwiGLU(nn.Module):
 class DecoderBlock(nn.Module):
     def __init__(self, config: LLMConfig) -> None:
         super().__init__()
-        self.rn1 = nn.RMSNorm(config.d_model)
+        self.rn1 = nn.RMSNorm(config.hidden_size)
         self.attention = MultiHeadMaskedAttention(config)
         self.swiglu = SwiGLU(config)
-        self.rn2 = nn.RMSNorm(config.d_model)
+        self.rn2 = nn.RMSNorm(config.hidden_size)
 
     def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         attention_out, kv_cache = self.attention(self.rn1(x), kv_cache)
@@ -115,10 +122,10 @@ class LLM(nn.Module):
         super().__init__()
         self.max_len: int = config.max_len
 
-        self.tok_embed: nn.Embedding = nn.Embedding(config.vocab_size, config.d_model)
+        self.tok_embed: nn.Embedding = nn.Embedding(config.vocab_size, config.hidden_size)
         self.blocks: nn.ModuleList = nn.ModuleList([DecoderBlock(config) for _ in range(config.num_layers)])
-        self.ln = nn.RMSNorm(config.d_model)
-        self.lm_head: nn.Linear = nn.Linear(config.d_model, config.vocab_size)
+        self.ln = nn.RMSNorm(config.hidden_size)
+        self.lm_head: nn.Linear = nn.Linear(config.hidden_size, config.vocab_size)
         self.lm_head.weight = self.tok_embed.weight
 
 

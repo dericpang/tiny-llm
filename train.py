@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--d_model", type=int, default=512)
     parser.add_argument("--num_layers", type=int, default=6)
     parser.add_argument("--num_heads", type=int, default=8)
+    parser.add_argument("--num_kv_heads", type=int, default=2)
     parser.add_argument("--max_len", type=int, default=64)
     parser.add_argument("--rope_theta", type=float, default=10_000.0)
     parser.add_argument("--flash_attention", type=bool, default=True)
@@ -60,7 +61,7 @@ def main():
     dev_dataset = DATASETS[args.dataset](args.max_len, "dev")
     dev_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=True)
 
-    config = LLMConfig(vocab_size=train_dataset.vocab_size, d_model=args.d_model, num_heads=args.num_heads, num_layers=args.num_layers, max_len=args.max_len, rope_theta=args.rope_theta, flash_attention=args.flash_attention)
+    config = LLMConfig(vocab_size=train_dataset.vocab_size, hidden_size=args.d_model, num_heads=args.num_heads, num_kv_heads=args.num_kv_heads, num_layers=args.num_layers, max_len=args.max_len, rope_theta=args.rope_theta, flash_attention=args.flash_attention)
     print("Model config:", config)
     model = LLM(config).to(device)
     print("Vocab size:", train_dataset.vocab_size)
