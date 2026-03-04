@@ -2,7 +2,7 @@ import argparse
 import os
 import time
 from itertools import cycle
-from typing import Callable
+from typing import Callable, TypedDict
 
 import torch
 import torch.optim as optim
@@ -10,16 +10,75 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data.shakespeare import ShakespeareCharDataset, ShakespeareDataset
-from data.simple import SimpleCharDataset
+from data.tiny_char import TinyCharDataset
 from model import LLM, LLMConfig
 
 
-TrainDataset = SimpleCharDataset | ShakespeareCharDataset | ShakespeareDataset
+TrainDataset = TinyCharDataset | ShakespeareCharDataset | ShakespeareDataset
 DATASETS: dict[str, Callable[[int, str], TrainDataset]] = {
-    "simple_char": SimpleCharDataset,
+    "simple_char": TinyCharDataset,
     "shakespeare_char": ShakespeareCharDataset,
     "shakespeare": ShakespeareDataset,
 }
+
+
+class TrainOutput(TypedDict):
+    loss: float | None
+    time: float
+
+
+def train(
+    model: LLM,
+    config: LLMConfig,
+    train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    dev_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]],
+    optimizer: optim.Optimizer,
+    device: torch.device,
+    steps: int,
+    save_steps: int | None,
+    output_dir: str | None,
+):
+    start = time.time()
+    loss = None
+    pbar = tqdm(enumerate(cycle(train_loader)), total=steps, desc="Training")
+    for i, (x, y) in pbar:
+        model.train()
+        if i >= steps:
+            break
+
+        x, y = x.to(device), y.to(device)
+        optimizer.zero_grad()
+        _, loss, _ = model(x, y)
+        assert loss is not None
+        loss.backward()
+        optimizer.step()  # type: ignore[no-untyped-call]
+
+        pbar.set_postfix(loss=f"{loss.item():.4f}")  # type: ignore[no-untyped-call]
+
+        is_last = (i + 1) == steps
+        is_save_step = save_steps is not None and (i + 1) % save_steps == 0
+        if output_dir is not None and (is_last or is_save_step):
+            os.makedirs(output_dir, exist_ok=True)
+            out_path = os.path.join(output_dir, f"step_{i + 1}.pt")
+            model.eval()
+            total_dev_loss = 0.0
+            num_batches = 0
+            with torch.no_grad():
+                for dev_x, dev_y in dev_loader:
+                    dev_x, dev_y = dev_x.to(device), dev_y.to(device)
+                    _, batch_loss, _ = model(dev_x, dev_y)
+                    assert batch_loss is not None
+                    total_dev_loss += batch_loss.item()
+                    num_batches += 1
+            avg_dev_loss = total_dev_loss / num_batches
+            print(f"Step {i + 1} | Dev loss: {avg_dev_loss:.4f}")
+            model.train()
+            torch.save(
+                {"config": vars(config), "state_dict": model.state_dict()}, out_path
+            )
+            print(f"Saved checkpoint to {out_path}")
+    end = time.time()
+    return TrainOutput(loss=loss.item() if loss is not None else None, time=end - start)
 
 
 def main():
@@ -34,7 +93,7 @@ def main():
     parser.add_argument("--flash_attention", type=bool, default=True)
 
     parser.add_argument(
-        "--dataset", type=str, choices=list(DATASETS.keys()), default="simple_char"
+        "--dataset", type=str, choices=list(DATASETS.keys()), default="shakespeare"
     )
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--steps", type=int, default=500)
@@ -75,6 +134,7 @@ def main():
         num_kv_heads=args.num_kv_heads,
         num_layers=args.num_layers,
         max_len=args.max_len,
+        tie_weights=True,
         rope_theta=args.rope_theta,
         flash_attention=args.flash_attention,
     )
@@ -87,47 +147,19 @@ def main():
             print(name, f"{param.numel():,}")
     optimizer: optim.AdamW = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
-    start = time.time()
-    pbar = tqdm(enumerate(cycle(train_loader)), total=args.steps, desc="Training")
-    for i, (x, y) in pbar:
-        model.train()
-        if i >= args.steps:
-            break
-
-        x, y = x.to(device), y.to(device)
-        optimizer.zero_grad()
-        _, loss, _ = model(x, y)
-        assert loss is not None
-        loss.backward()
-        optimizer.step()  # type: ignore[no-untyped-call]
-
-        pbar.set_postfix(loss=f"{loss.item():.4f}")  # type: ignore[no-untyped-call]
-
-        is_last = (i + 1) == args.steps
-        is_save_step = args.save_steps is not None and (i + 1) % args.save_steps == 0
-        if args.output_dir is not None and (is_last or is_save_step):
-            os.makedirs(args.output_dir, exist_ok=True)
-            out_path = os.path.join(args.output_dir, f"step_{i + 1}.pt")
-            model.eval()
-            total_dev_loss = 0.0
-            num_batches = 0
-            with torch.no_grad():
-                for dev_x, dev_y in dev_loader:
-                    dev_x, dev_y = dev_x.to(device), dev_y.to(device)
-                    _, batch_loss, _ = model(dev_x, dev_y)
-                    assert batch_loss is not None
-                    total_dev_loss += batch_loss.item()
-                    num_batches += 1
-            avg_dev_loss = total_dev_loss / num_batches
-            print(f"Step {i + 1} | Dev loss: {avg_dev_loss:.4f}")
-            model.train()
-            torch.save(
-                {"config": vars(config), "state_dict": model.state_dict()}, out_path
-            )
-            print(f"Saved checkpoint to {out_path}")
-    end = time.time()
+    train_out = train(
+        model,
+        config,
+        train_loader,
+        dev_loader,
+        optimizer,
+        device,
+        args.steps,
+        args.save_steps,
+        args.output_dir,
+    )
     print(
-        f"Training took {end - start:.2f}s ({args.steps / (end - start):.2f} steps/second)"
+        f"Training took {train_out['time']:.2f}s ({args.steps / train_out['time']:.2f} steps/second)"
     )
 
 

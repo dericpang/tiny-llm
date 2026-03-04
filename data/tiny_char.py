@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset
 
 PAD_TOKEN_ID = 0
-
+TRAIN_SPLIT = 0.8
 DATA = [
     "My name is Deric.",
     "Jenny is my wife.",
@@ -15,10 +15,7 @@ DATA = [
 ]
 
 
-TRAIN_SPLIT = 0.8
-
-
-class SimpleCharDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+class TinyCharDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
     def __init__(self, max_len: int, split: str = "train"):
         text = "".join(DATA)
         chars = sorted(set(text))

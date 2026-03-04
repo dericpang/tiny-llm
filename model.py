@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-PAD_TOKEN_ID = 0
+from data.tiny_char import PAD_TOKEN_ID
 
 
 @dataclass
@@ -16,6 +16,7 @@ class LLMConfig:
     num_kv_heads: int
     num_layers: int
     max_len: int
+    tie_weights: bool
     rope_theta: float
     flash_attention: bool
 
@@ -198,7 +199,8 @@ class LLM(nn.Module):
         )
         self.ln = nn.RMSNorm(config.hidden_size)
         self.lm_head: nn.Linear = nn.Linear(config.hidden_size, config.vocab_size)
-        self.lm_head.weight = self.tok_embed.weight
+        if config.tie_weights:
+            self.lm_head.weight = self.tok_embed.weight
 
     def forward(
         self,

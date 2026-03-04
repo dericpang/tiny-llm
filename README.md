@@ -10,16 +10,27 @@ Features:
 - Flash attention
 - Grouped query attention
 
-## Commands
+## Train
 
 Train a small LLM on Shakespeare data:
 
 ```
-uv run -m train --output_dir out/shakespeare --save_steps 100 --dataset shakespeare --steps=500
+uv run -m train --dataset=shakespeare --output_dir=out/shakespeare
 ```
 
-Run the KV-cache experiment:
+## Experiments
+
+These tiny experiments demonstrate known research results.
+
+### Weight-tying parameter efficiency
 
 ```
-uv run -m experiments.kv_cache --checkpoint out/shakespeare/step_500.pt --dataset shakespeare
+uv run -m experiments.kv_cache --dataset=shakespeare --checkpoint=out/shakespeare/step_500.pt
+```
+
+### KV-cache decoding experiment
+
+
+```
+uv run -m experiments.kv_cache --dataset=shakespeare --checkpoint=out/shakespeare/step_500.pt
 ```
