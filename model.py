@@ -82,6 +82,19 @@ class MultiHeadMaskedAttention(nn.Module):
         return y, new_kv_cache
 
 
+class FeedForwardNetwork(nn.Module):
+    def __init__(self, config: LLMConfig) -> None:
+        super().__init__()
+        self.l1 = nn.Linear(config.hidden_size, 4 * config.hidden_size)
+        self.l2 = nn.Linear(config.hidden_size*4, config.hidden_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.l1(x)
+        x = F.gelu(x)
+        x = self.l2(x) 
+        return x
+
+
 class SwiGLU(nn.Module):
     def __init__(self, config: LLMConfig) -> None:
         super().__init__()
