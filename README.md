@@ -12,7 +12,7 @@ Features:
 
 ## Commands
 
-Train a small character LLM on Shakespeare data:
+Train a small LLM on Shakespeare data:
 
 ```
 uv run -m train --output_dir out/shakespeare --save_steps 100 --dataset shakespeare --steps=500
