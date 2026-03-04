@@ -40,7 +40,7 @@ class MultiHeadMaskedAttention(nn.Module):
             "mask", torch.tril(torch.ones(config.max_len, config.max_len)) == 0
         )
 
-        self.rope_cos: torch.Tensor  # (1, 1, max_len, d_head // 2)
+        self.rope_cos: torch.Tensor  # (1, 1, max_len, head_size // 2)
         self.register_buffer(
             "rope_cos",
             torch.cos(
@@ -50,7 +50,7 @@ class MultiHeadMaskedAttention(nn.Module):
             .unsqueeze(0)
             .repeat(config.max_len, 1)[None, None, :, :],
         )
-        self.rope_sin: torch.Tensor  # (1, 1, max_len, d_head // 2)
+        self.rope_sin: torch.Tensor  # (1, 1, max_len, head_size // 2)
         self.register_buffer(
             "rope_sin",
             torch.sin(
@@ -62,7 +62,7 @@ class MultiHeadMaskedAttention(nn.Module):
         )
 
     def _apply_rope(self, x: torch.Tensor, T: int, past_T: int) -> torch.Tensor:
-        x1, x2 = x.chunk(2, dim=-1)  # each (B, num_heads, T, d_head // 2)
+        x1, x2 = x.chunk(2, dim=-1)  # each (B, num_heads, T, head_size // 2)
         return torch.cat(
             [
                 x1 * self.rope_cos[:, :, past_T : past_T + T]
@@ -105,8 +105,8 @@ class MultiHeadMaskedAttention(nn.Module):
 
         if kv_cache:
             past_k, past_v = kv_cache
-            k = torch.cat([past_k, k], dim=2)  # (B, num_kv_heads, past_T + T, d_head)
-            v = torch.cat([past_v, v], dim=2)  # (B, num_kv_heads, past_T + T, d_head)
+            k = torch.cat([past_k, k], dim=2)  # (B, num_kv_heads, past_T + T, head_size)
+            v = torch.cat([past_v, v], dim=2)  # (B, num_kv_heads, past_T + T, head_size)
         new_kv_cache = (k, v)
 
         k = torch.repeat_interleave(
@@ -127,7 +127,7 @@ class MultiHeadMaskedAttention(nn.Module):
             )  # (B, num_heads, T, past_T + T)
             att = att.masked_fill(mask, float("-inf"))
             att = F.softmax(att, dim=-1)
-            y = att @ v  # (B, num_heads, T, d_head)
+            y = att @ v  # (B, num_heads, T, head_size)
             y = y.transpose(1, 2).contiguous().view(B, T, C)
 
         y = self.o(y)
