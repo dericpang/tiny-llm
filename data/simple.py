@@ -11,7 +11,7 @@ DATA = [
     "I live in Queens.",
     "I take the W train to work",
     "I grew up playing tennis.",
-    "These days, I really enjoy playing poker!"
+    "These days, I really enjoy playing poker!",
 ]
 
 
@@ -31,7 +31,9 @@ class SimpleCharDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
         self.examples: list[torch.Tensor] = []
         for example in split_data:
-            indexes = [self.ctoi[c] for c in example] + [PAD_TOKEN_ID] * (max_len - len(example))
+            indexes = [self.ctoi[c] for c in example] + [PAD_TOKEN_ID] * (
+                max_len - len(example)
+            )
             self.examples.append(torch.tensor(indexes, dtype=torch.long))
 
     def __len__(self) -> int:

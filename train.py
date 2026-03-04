@@ -15,7 +15,6 @@ from model import LLM, LLMConfig
 
 
 TrainDataset = SimpleCharDataset | ShakespeareCharDataset | ShakespeareDataset
-
 DATASETS: dict[str, Callable[[int, str], TrainDataset]] = {
     "simple_char": SimpleCharDataset,
     "shakespeare_char": ShakespeareCharDataset,
@@ -34,14 +33,18 @@ def main():
     parser.add_argument("--rope_theta", type=float, default=10_000.0)
     parser.add_argument("--flash_attention", type=bool, default=True)
 
-    parser.add_argument("--dataset", type=str, choices=list(DATASETS.keys()), default="simple_char")
+    parser.add_argument(
+        "--dataset", type=str, choices=list(DATASETS.keys()), default="simple_char"
+    )
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--save_steps", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--debug", type=bool, default=False)
-    parser.add_argument("--device", type=str, choices=["cuda", "mps", "cpu"], default=None)
+    parser.add_argument(
+        "--device", type=str, choices=["cuda", "mps", "cpu"], default=None
+    )
 
     args = parser.parse_args()
 
@@ -57,11 +60,24 @@ def main():
 
     train_dataset = DATASETS[args.dataset](args.max_len, "train")
     assert hasattr(train_dataset, "vocab_size")
-    train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    train_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=True
+    )
     dev_dataset = DATASETS[args.dataset](args.max_len, "dev")
-    dev_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=True)
+    dev_loader: DataLoader[tuple[torch.Tensor, torch.Tensor]] = DataLoader(
+        dev_dataset, batch_size=args.batch_size, shuffle=True
+    )
 
-    config = LLMConfig(vocab_size=train_dataset.vocab_size, hidden_size=args.d_model, num_heads=args.num_heads, num_kv_heads=args.num_kv_heads, num_layers=args.num_layers, max_len=args.max_len, rope_theta=args.rope_theta, flash_attention=args.flash_attention)
+    config = LLMConfig(
+        vocab_size=train_dataset.vocab_size,
+        hidden_size=args.d_model,
+        num_heads=args.num_heads,
+        num_kv_heads=args.num_kv_heads,
+        num_layers=args.num_layers,
+        max_len=args.max_len,
+        rope_theta=args.rope_theta,
+        flash_attention=args.flash_attention,
+    )
     print("Model config:", config)
     model = LLM(config).to(device)
     print("Vocab size:", train_dataset.vocab_size)
@@ -105,10 +121,14 @@ def main():
             avg_dev_loss = total_dev_loss / num_batches
             print(f"Step {i + 1} | Dev loss: {avg_dev_loss:.4f}")
             model.train()
-            torch.save({"config": vars(config), "state_dict": model.state_dict()}, out_path)
+            torch.save(
+                {"config": vars(config), "state_dict": model.state_dict()}, out_path
+            )
             print(f"Saved checkpoint to {out_path}")
     end = time.time()
-    print(f"Training took {end - start:.2f}s ({args.steps / (end - start):.2f} steps/second)")
+    print(
+        f"Training took {end - start:.2f}s ({args.steps / (end - start):.2f} steps/second)"
+    )
 
 
 if __name__ == "__main__":
